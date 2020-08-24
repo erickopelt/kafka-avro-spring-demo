@@ -1,0 +1,27 @@
+{
+    "type": "record",
+    "name": "User",
+    "namespace": "io.opelt.kafkaspringdemo",
+    "fields": [
+        {
+            "name": "id",
+            "type": "string"
+        },
+        {
+            "name": "name",
+            "type": "string"
+        },
+        {
+            "name": "birthday",
+            "type": "long",
+            "logicalType": "date"
+        },
+        {
+            "name": "addresses",
+            "type": {
+                "type": "array",
+                "items": "string"
+            }
+        }
+    ]
+}
