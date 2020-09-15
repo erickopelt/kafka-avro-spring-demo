@@ -5,8 +5,9 @@ import io.confluent.kafka.serializers.KafkaAvroDeserializer;
 import io.opelt.kafkaspringdemo.User;
 import io.restassured.RestAssured;
 import io.restassured.http.ContentType;
-import org.apache.avro.generic.GenericData;
-import org.apache.http.HttpHeaders;
+import kafka.server.KafkaServer;
+import org.apache.avro.specific.SpecificData;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -17,6 +18,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.web.server.LocalServerPort;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
 import org.springframework.kafka.listener.ContainerProperties;
@@ -32,48 +34,43 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.UUID;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
+import static com.jayway.jsonpath.internal.path.PathCompiler.fail;
 import static io.restassured.RestAssured.given;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.fail;
 
-@EmbeddedKafka(topics = "users", bootstrapServersProperty = "spring.kafka.bootstrap-servers")
+@EmbeddedKafka(topics = "${topic.name}", bootstrapServersProperty = "spring.kafka.bootstrap-servers")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 public class UserProducerIT {
 
     @Value("${topic.name}")
-    private String topicName;
+    private String topic;
     @Autowired
     private EmbeddedKafkaBroker embeddedKafkaBroker;
     @LocalServerPort
     private int port;
-
-    private Map<String, User> records;
-    private KafkaMessageListenerContainer<String, User> container;
+    private BlockingQueue<ConsumerRecord> records;
+    private KafkaMessageListenerContainer<String, Object> container;
 
     @BeforeEach
     public void setup() {
         RestAssured.port = port;
+        embeddedKafkaBroker.getKafkaServers().forEach(KafkaServer::startup);
 
-        Map<String, Object> configs = new HashMap<>(KafkaTestUtils.consumerProps("sender", "false", embeddedKafkaBroker));
-        DefaultKafkaConsumerFactory<String, Object> consumerFactory =
+        var configs = new HashMap<>(KafkaTestUtils.consumerProps(UUID.randomUUID().toString(), "false", embeddedKafkaBroker));
+        var consumerFactory =
                 new DefaultKafkaConsumerFactory<>(configs, new StringDeserializer(), new KafkaAvroDeserializer(MockSchemaRegistry.getClientForScope("localhost:8081")));
-        ContainerProperties containerProperties = new ContainerProperties(topicName);
+        ContainerProperties containerProperties = new ContainerProperties(topic);
         container = new KafkaMessageListenerContainer<>(consumerFactory, containerProperties);
-        records = new ConcurrentHashMap<>();
-        container.setupMessageListener((MessageListener<String, GenericData.Record>) record ->
-                records.put(record.key(),
-                        User.newBuilder()
-                                .setId((CharSequence) record.value().get("id"))
-                                .setName((CharSequence) record.value().get("name"))
-                                .setBirthday((Long) record.value().get("birthday"))
-                                .setAddresses((List<CharSequence>) record.value().get("addresses"))
-                                .build()));
+        records = new LinkedBlockingQueue<>();
+        container.setupMessageListener((MessageListener<String, ConsumerRecord>) record -> records.add(record));
 
         container.start();
         ContainerTestUtils.waitForAssignment(container, embeddedKafkaBroker.getPartitionsPerTopic());
@@ -105,10 +102,11 @@ public class UserProducerIT {
             fail("Can't parse location header");
         }
 
-        var record = records.get(id.get());
+        var record = records.poll(100, TimeUnit.MILLISECONDS);
 
-        assertThat(record).isNotNull().satisfies(user -> {
-            assertThat(user.getId()).isNotBlank();
+        assertThat(record).isNotNull().satisfies(genericRecord -> {
+            var user = (User) SpecificData.get().deepCopy(User.SCHEMA$, genericRecord.value());
+            assertThat(user.getId().toString()).isEqualTo(id.get());
             assertThat(user.getName().toString()).isEqualTo("erick");
             assertThat(Instant.ofEpochMilli(user.getBirthday()).atZone(ZoneId.of("UTC"))
                     .format(DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"))).isEqualTo("2020-08-18T19:15:54.423Z");
@@ -123,5 +121,4 @@ public class UserProducerIT {
         }
         return Optional.empty();
     }
-
 }
