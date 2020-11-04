@@ -37,7 +37,7 @@ import static org.hamcrest.Matchers.equalTo;
 
 @EmbeddedKafka(topics = "${topic.name}", bootstrapServersProperty = "spring.kafka.bootstrap-servers")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-public class UserConsumerIT {
+public class UserConsumerIT  {
 
     @Value("${topic.name}")
     private String topicName;

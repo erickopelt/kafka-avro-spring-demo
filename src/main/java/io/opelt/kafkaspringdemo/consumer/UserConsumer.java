@@ -8,6 +8,7 @@ import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.kafka.annotation.KafkaListener;
+import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
@@ -24,16 +25,19 @@ public class UserConsumer {
     }
 
     @KafkaListener(topics = "${topic.name}")
-    public void consume(ConsumerRecord<String, User> record) {
+    public void consume(ConsumerRecord<String, User> record, Acknowledgment ack) {
         var user = record.value();
         logger.info(user.toString());
         UserEntity userEntity = new UserEntity()
                 .setId(user.getId().toString())
                 .setName(user.getName().toString())
                 .setBirthday(Instant.ofEpochMilli(user.getBirthday()));
-        userEntity.setAddresses(user.getAddresses().stream().map(address -> new AddressEntity()
-                .setAddress(address.toString())
-                .setUser(userEntity)).collect(Collectors.toList()));
+        userEntity.setAddresses(user.getAddresses().stream()
+                .map(address -> new AddressEntity()
+                        .setAddress(address.toString())
+                        .setUser(userEntity))
+                .collect(Collectors.toList()));
         userRepository.save(userEntity);
+        ack.acknowledge();
     }
 }
