@@ -31,16 +31,19 @@ import org.springframework.kafka.test.utils.KafkaTestUtils;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
-import java.util.*;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import static com.jayway.jsonpath.internal.path.PathCompiler.fail;
 import static io.restassured.RestAssured.given;
-import static java.util.Objects.nonNull;
-import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.awaitility.Awaitility.await;
 
 @EmbeddedKafka(topics = "${topic.name}", bootstrapServersProperty = "spring.kafka.bootstrap-servers")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
@@ -52,7 +55,7 @@ public class UserProducerIT {
     private EmbeddedKafkaBroker embeddedKafkaBroker;
     @LocalServerPort
     private int port;
-    private Deque<ConsumerRecord> records;
+    private final BlockingQueue<ConsumerRecord> records = new LinkedBlockingQueue<>();
     private KafkaMessageListenerContainer<String, Object> container;
 
     @BeforeEach
@@ -64,11 +67,11 @@ public class UserProducerIT {
                 new DefaultKafkaConsumerFactory<>(configs, new StringDeserializer(), new KafkaAvroDeserializer(MockSchemaRegistry.getClientForScope("localhost:8081")));
         ContainerProperties containerProperties = new ContainerProperties(topic);
         container = new KafkaMessageListenerContainer<>(consumerFactory, containerProperties);
-        records = new LinkedList<>();
         container.setupMessageListener((MessageListener<String, ConsumerRecord>) records::add);
-
         container.start();
         ContainerTestUtils.waitForAssignment(container, embeddedKafkaBroker.getPartitionsPerTopic());
+
+        records.clear();
     }
 
     @AfterEach
@@ -78,7 +81,6 @@ public class UserProducerIT {
 
     @Test
     public void whenCreateUserSendMessageToKafka() throws Exception {
-        var timestamp = Instant.now().toEpochMilli();
         var userJson = new JSONObject()
                 .put("name", "erick")
                 .put("birthday", "2020-08-18T19:15:54.423Z")
@@ -98,13 +100,7 @@ public class UserProducerIT {
             fail("Can't parse location header");
         }
 
-
-        System.out.printf("Records size %d\n", records.size());
-        await()
-                .atMost(5, SECONDS)
-                .until(() -> records.peekLast(), record -> nonNull(record) && record.timestamp() > timestamp);
-
-        var record = records.pollLast();
+        var record = records.poll(1, TimeUnit.SECONDS);
 
         assertThat(record).isNotNull().satisfies(genericRecord -> {
             var user = (User) SpecificData.get().deepCopy(User.SCHEMA$, genericRecord.value());
@@ -119,7 +115,7 @@ public class UserProducerIT {
     private Optional<String> getIdFromLocation(String location) {
         var matcher = Pattern.compile("http://localhost:.*/users/(?<id>.*)").matcher(location);
         if (matcher.find()) {
-            return Optional.ofNullable(matcher.group("id"));
+            return Optional.ofNullable(matcher.group("id")).filter(id -> !id.isBlank());
         }
         return Optional.empty();
     }
